@@ -33,6 +33,7 @@ from geometry_msgs.msg import Transform
 from geometry_msgs.msg import Quaternion
 from ackermann_msgs.msg import AckermannDriveStamped
 from tf2_ros import TransformBroadcaster
+import tf_transformations as tf
 
 import gym
 import numpy as np
@@ -66,6 +67,12 @@ class GymBridge(Node):
         self.declare_parameter('stheta1')
         self.declare_parameter('kb_teleop')
 
+        self.declare_parameter('ego_noisy_odom_topic')
+        self.declare_parameter('ego_odom_noise_cov_speed')
+        self.declare_parameter('ego_odom_noise_cov_heading')
+
+
+
         # check num_agents
         num_agents = self.get_parameter('num_agent').value
         if num_agents < 1 or num_agents > 2:
@@ -96,6 +103,7 @@ class GymBridge(Node):
         self.angle_inc = scan_fov / scan_beams
         self.ego_namespace = self.get_parameter('ego_namespace').value
         ego_odom_topic = self.ego_namespace + '/' + self.get_parameter('ego_odom_topic').value
+        ego_noisy_odom_topic = self.ego_namespace + '/' + self.get_parameter('ego_noisy_odom_topic').value
         self.scan_distance_to_base_link = self.get_parameter('scan_distance_to_base_link').value
         
         if num_agents == 2:
@@ -135,7 +143,13 @@ class GymBridge(Node):
         # publishers
         self.ego_scan_pub = self.create_publisher(LaserScan, ego_scan_topic, 10)
         self.ego_odom_pub = self.create_publisher(Odometry, ego_odom_topic, 10)
+        self.ego_noisy_odom_pub = self.create_publisher(Odometry, ego_noisy_odom_topic, 10)
         self.ego_drive_published = False
+
+        self.ego_noisy_odom = None
+        self.last_odom_update_ts = None
+
+
         if num_agents == 2:
             self.opp_scan_pub = self.create_publisher(LaserScan, opp_scan_topic, 10)
             self.ego_opp_odom_pub = self.create_publisher(Odometry, ego_opp_odom_topic, 10)
@@ -279,7 +293,25 @@ class GymBridge(Node):
         self.ego_speed[1] = self.obs['linear_vels_y'][0]
         self.ego_speed[2] = self.obs['ang_vels_z'][0]
 
-        
+        if (self.ego_noisy_odom is None):
+            ego_odom = Odometry()
+            ts = self.get_clock().now().to_msg()
+            ego_odom.header.stamp = ts
+            ego_odom.header.frame_id = 'noisy_odom'
+            ego_odom.child_frame_id = self.ego_namespace + '/base_link'
+            ego_odom.pose.pose.position.x = self.ego_pose[0]
+            ego_odom.pose.pose.position.y = self.ego_pose[1]
+            ego_quat = euler.euler2quat(0., 0., self.ego_pose[2], axes='sxyz')
+            ego_odom.pose.pose.orientation.x = ego_quat[1]
+            ego_odom.pose.pose.orientation.y = ego_quat[2]
+            ego_odom.pose.pose.orientation.z = ego_quat[3]
+            ego_odom.pose.pose.orientation.w = ego_quat[0]
+            ego_odom.twist.twist.linear.x = self.ego_speed[0]
+            ego_odom.twist.twist.linear.y = self.ego_speed[1]
+            ego_odom.twist.twist.angular.z = self.ego_speed[2]
+            self.ego_noisy_odom = ego_odom
+            self.last_odom_update_ts = ts
+
 
     def _publish_odom(self, ts):
         ego_odom = Odometry()
@@ -317,6 +349,48 @@ class GymBridge(Node):
             self.opp_ego_odom_pub.publish(ego_odom)
             self.ego_opp_odom_pub.publish(opp_odom)
 
+        if (self.ego_noisy_odom is not None):
+            # update and publish ego noisy odometry
+            ego_noisy_odom = self.ego_noisy_odom
+            dt = (ts.sec + ts.nanosec/1e9 - (self.last_odom_update_ts.sec + self.last_odom_update_ts.nanosec/1e9))
+            self.last_odom_update_ts = ts
+            ego_noisy_odom.header.stamp = ts
+            ego_noisy_odom.header.frame_id = 'noisy_odom'
+            ego_noisy_odom.child_frame_id = self.ego_namespace + '/base_link'
+            noise = np.random.normal(0, self.get_parameter('ego_odom_noise_cov_speed').value)
+            ego_noisy_odom.pose.pose.position.x += (self.ego_speed[0]+noise)*dt
+            noise = np.random.normal(0, self.get_parameter('ego_odom_noise_cov_speed').value)
+            ego_noisy_odom.pose.pose.position.y += (self.ego_speed[1]+noise)*dt
+            quat = ego_noisy_odom.pose.pose.orientation
+            _, _, heading = euler.quat2euler([quat.w, quat.x, quat.y, quat.z], axes='sxyz')
+            noise = np.random.normal(0, self.get_parameter('ego_odom_noise_cov_heading').value)
+            ego_quat = euler.euler2quat(0., 0., heading + (self.ego_speed[2]+noise)*dt, axes='sxyz')
+            ego_noisy_odom.pose.pose.orientation.x = ego_quat[1]
+            ego_noisy_odom.pose.pose.orientation.y = ego_quat[2]
+            ego_noisy_odom.pose.pose.orientation.z = ego_quat[3]
+            ego_noisy_odom.pose.pose.orientation.w = ego_quat[0]
+            ego_noisy_odom.twist.twist.linear.x = self.ego_speed[0]
+            ego_noisy_odom.twist.twist.linear.y = self.ego_speed[1]
+            ego_noisy_odom.twist.twist.angular.z = self.ego_speed[2]
+            self.ego_noisy_odom = ego_noisy_odom
+            self.ego_noisy_odom_pub.publish(ego_noisy_odom)
+
+            # publish noisy_odom - > base_link transformation
+            noisy_odom_ts = TransformStamped()
+            noisy_odom_ts.transform.translation.x = ego_noisy_odom.pose.pose.position.x
+            noisy_odom_ts.transform.translation.y = ego_noisy_odom.pose.pose.position.y
+            noisy_odom_ts.transform.translation.z = 0.0
+            noisy_odom_ts.transform.rotation.x = ego_quat[1]
+            noisy_odom_ts.transform.rotation.y = ego_quat[2]
+            noisy_odom_ts.transform.rotation.z = ego_quat[3]
+            noisy_odom_ts.transform.rotation.w = ego_quat[0]
+            noisy_odom_ts.header.stamp = ts
+            noisy_odom_ts.header.frame_id = 'noisy_odom'
+            noisy_odom_ts.child_frame_id = self.ego_namespace + '/base_link'
+            self.br.sendTransform(noisy_odom_ts)
+
+
+
     def _publish_transforms(self, ts):
         ego_t = Transform()
         ego_t.translation.x = self.ego_pose[0]
@@ -329,10 +403,38 @@ class GymBridge(Node):
         ego_t.rotation.w = ego_quat[0]
 
         ego_ts = TransformStamped()
-        ego_ts.transform = ego_t
         ego_ts.header.stamp = ts
-        ego_ts.header.frame_id = 'map'
-        ego_ts.child_frame_id = self.ego_namespace + '/base_link'
+        #ego_ts.transform = ego_t
+        #ego_ts.header.frame_id = 'map'
+        #ego_ts.child_frame_id = self.ego_namespace + '/base_link'
+
+        # since this node publish map(true odom) -> base_link
+        # and we also have odom (noisy odom) -> base-link
+        # this violates the tf tree structure (one parent only), so we publish base_link -> map
+        # thus we invert the transformation here
+
+        # to maintain tf2 tree structure, we can't publish map ->
+        trans = ego_t.translation
+        rot = ego_t.rotation
+        T = tf.concatenate_matrices(
+            tf.translation_matrix([trans.x, trans.y, trans.z]),
+            tf.quaternion_matrix([rot.x, rot.y, rot.z, rot.w])
+        )
+        T_inv = tf.inverse_matrix(T)
+        trans = tf.translation_from_matrix(T_inv)
+        rot = tf.quaternion_from_matrix(T_inv)
+        ego_t_inv = Transform()
+        ego_t_inv.translation.x = trans[0]
+        ego_t_inv.translation.y = trans[1]
+        ego_t_inv.translation.z = trans[2]
+        ego_t_inv.rotation.x = rot[0]
+        ego_t_inv.rotation.y = rot[1]
+        ego_t_inv.rotation.z = rot[2]
+        ego_t_inv.rotation.w = rot[3]
+        ego_ts.transform = ego_t_inv
+        ego_ts.header.frame_id = self.ego_namespace + '/base_link'
+        ego_ts.child_frame_id = 'map'
+
         self.br.sendTransform(ego_ts)
 
         if self.has_opp:
