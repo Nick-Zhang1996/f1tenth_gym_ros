@@ -54,8 +54,8 @@ def generate_launch_description():
         package='nav2_map_server',
         executable='map_server',
         parameters=[{'yaml_filename': config_dict['bridge']['ros__parameters']['map_path'] + '.yaml'},
-                    {'topic': 'map'},
-                    {'frame_id': 'map'},
+                    {'topic_name': 'sim_map'},
+                    {'frame_id': 'sim_map'},
                     {'output': 'screen'},
                     {'use_sim_time': True}]
     )
