@@ -53,6 +53,7 @@ def generate_launch_description():
     map_server_node = Node(
         package='nav2_map_server',
         executable='map_server',
+        name='sim_map_server',
         parameters=[{'yaml_filename': config_dict['bridge']['ros__parameters']['map_path'] + '.yaml'},
                     {'topic_name': 'sim_map'},
                     {'frame_id': 'sim_map'},
@@ -66,7 +67,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{'use_sim_time': True},
                     {'autostart': True},
-                    {'node_names': ['map_server']}]
+                    {'node_names': ['sim_map_server']}]
     )
     ego_robot_publisher = Node(
         package='robot_state_publisher',
