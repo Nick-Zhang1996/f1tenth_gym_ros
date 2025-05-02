@@ -295,6 +295,7 @@ class GymBridge(Node):
         self.ego_speed[0] = self.obs['linear_vels_x'][0]
         self.ego_speed[1] = self.obs['linear_vels_y'][0]
         self.ego_speed[2] = self.obs['ang_vels_z'][0]
+        self.get_logger().info(f'{self.ego_pose}, {self.ego_speed}')
 
         if (self.ego_noisy_odom is None):
             self.get_logger().info(f'initialize noisy_odom')
@@ -366,12 +367,15 @@ class GymBridge(Node):
             ego_noisy_odom.child_frame_id = self.ego_namespace + '/base_link'
             quat = ego_noisy_odom.pose.pose.orientation
             _, _, heading = euler.quat2euler([quat.w, quat.x, quat.y, quat.z], axes='sxyz')
-            noise = np.random.normal(0, self.get_parameter('ego_odom_noise_cov_speed').value)
+            noise = np.random.normal(0, self.get_parameter('ego_odom_noise_cov_speed').value) * min(1.0, self.ego_speed[0])
             ego_noisy_odom.pose.pose.position.x += ((self.ego_speed[0]+noise)*cos(heading) - (self.ego_speed[1]+noise)*sin(heading) )*dt
-            noise = np.random.normal(0, self.get_parameter('ego_odom_noise_cov_speed').value)
+            noise = np.random.normal(0, self.get_parameter('ego_odom_noise_cov_speed').value) * min(1.0, self.ego_speed[0])
             ego_noisy_odom.pose.pose.position.y += ((self.ego_speed[0]+noise)*sin(heading) + (self.ego_speed[1]+noise)*cos(heading) )*dt
-            noise = np.random.normal(0, self.get_parameter('ego_odom_noise_cov_heading').value)
-            new_heading = heading + (self.ego_speed[2]+noise)*dt
+            noise = np.random.normal(0, self.get_parameter('ego_odom_noise_cov_heading').value) * min(1.0, self.ego_speed[0])
+            new_heading = heading
+            # for unknown reasons, the angular speed is nonzero when vehicle is stationary
+            if (self.ego_speed[0] > 0.01):
+                new_heading += (self.ego_speed[2]+noise)*dt
             ego_quat = euler.euler2quat(0., 0.,new_heading , axes='sxyz')
             ego_noisy_odom.pose.pose.orientation.x = ego_quat[1]
             ego_noisy_odom.pose.pose.orientation.y = ego_quat[2]
