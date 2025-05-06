@@ -170,6 +170,7 @@ class GymBridge(Node):
             '/initialpose',
             self.ego_reset_callback,
             10)
+        self.ego_drive_failsafe_timer = self.create_timer(1/10, self.ego_drive_failsafe)
         if num_agents == 2:
             self.opp_drive_sub = self.create_subscription(
                 AckermannDriveStamped,
@@ -190,7 +191,16 @@ class GymBridge(Node):
                 10)
 
 
+    def ego_drive_failsafe(self):
+        if (self.ego_drive_published):
+            now = self.get_clock().now().nanoseconds * 1e-9
+            if (now - self.ego_drive_ts > 0.1):
+                self.get_logger().info('failsafe, stopped...')
+                self.ego_requested_speed = 0
+                self.ego_steer = 0
+
     def drive_callback(self, drive_msg):
+        self.ego_drive_ts = to_sec(drive_msg.header.stamp)
         self.ego_requested_speed = drive_msg.drive.speed
         self.ego_steer = drive_msg.drive.steering_angle
         self.ego_drive_published = True
@@ -515,6 +525,9 @@ class GymBridge(Node):
             opp_scan_ts.header.frame_id = self.opp_namespace + '/base_link'
             opp_scan_ts.child_frame_id = self.opp_namespace + '/laser'
             self.br.sendTransform(opp_scan_ts)
+def to_sec(stamp):
+    ''' from ROS2 msg time stamp to seconds '''
+    return stamp.sec + stamp.nanosec*1e-9
 
 def main(args=None):
     rclpy.init(args=args)
