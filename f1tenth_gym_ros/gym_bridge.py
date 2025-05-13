@@ -137,7 +137,7 @@ class GymBridge(Node):
         # sim physical step timer
         self.drive_timer = self.create_timer(0.01, self.drive_timer_callback)
         # topic publishing timer
-        self.timer = self.create_timer(0.004, self.timer_callback)
+        self.timer = self.create_timer(0.02, self.timer_callback) #0.004
 
         # transform broadcaster
         self.br = TransformBroadcaster(self)
@@ -305,7 +305,7 @@ class GymBridge(Node):
         self.ego_speed[0] = self.obs['linear_vels_x'][0]
         self.ego_speed[1] = self.obs['linear_vels_y'][0]
         self.ego_speed[2] = self.obs['ang_vels_z'][0]
-        self.get_logger().info(f'{self.ego_pose}, {self.ego_speed}')
+        #self.get_logger().info(f'{self.ego_pose}, {self.ego_speed}')
 
         if (self.ego_noisy_odom is None):
             self.get_logger().info(f'initialize noisy_odom')
